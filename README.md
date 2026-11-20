@@ -42,6 +42,12 @@ alembic upgrade head
 ```
 
 > On first boot the API also runs `create_all` as a safety net, but **prefer Alembic** so schema stays versioned.
+>
+> If `adrobot.db` already exists from an earlier run (tables created by `create_all`), stamp instead of upgrading:
+>
+> ```bash
+> alembic stamp head
+> ```
 
 ### 3. Run API
 
