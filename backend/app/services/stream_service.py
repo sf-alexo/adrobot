@@ -5,12 +5,20 @@ from typing import Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import attributes, selectinload
 
 from app.models import CampaignRecord, StreamOfferRecord, StreamRecord
 from app.schemas import CampaignOut, StreamOfferOut, StreamOut
 from app.services.keitaro import KeitaroClient, KeitaroError
 from app.services.shares import active_share_total, recalculate_shares
+
+
+def _offers_collection(stream: StreamRecord) -> list:
+    """Access stream.offers without triggering async lazy-load after flush."""
+    state = attributes.instance_state(stream)
+    if "offers" not in state.dict:
+        attributes.set_committed_value(stream, "offers", [])
+    return stream.offers
 
 
 def _snapshot_offers(stream: StreamRecord) -> str:
@@ -22,7 +30,7 @@ def _snapshot_offers(stream: StreamRecord) -> str:
             "pinned": o.pinned,
             "status": o.status,
         }
-        for o in stream.offers
+        for o in _offers_collection(stream)
     ]
     return json.dumps(payload)
 
@@ -140,14 +148,19 @@ async def sync_streams_from_keitaro(
             )
             db.add(existing)
             await db.flush()
+            # flush expires relationship loaders; seed empty collection for async safety
+            attributes.set_committed_value(existing, "offers", [])
             campaign.streams.append(existing)
+            by_keitaro_id[keitaro_id] = existing
         else:
             existing.name = remote.get("name") or existing.name
             existing.stream_type = remote.get("type") or existing.stream_type
             existing.has_offers = has_offers or existing.has_offers
 
+        offers = _offers_collection(existing)
+
         if not existing.has_offers:
-            existing.offers.clear()
+            offers.clear()
             existing.is_dirty = False
             existing.published_snapshot = "[]"
             continue
@@ -160,7 +173,7 @@ async def sync_streams_from_keitaro(
             continue
 
         remote_ids = {o["offer_id"] for o in raw_offers}
-        local_by_id = {o.offer_id: o for o in existing.offers}
+        local_by_id = {o.offer_id: o for o in offers}
 
         for remote_offer in raw_offers:
             oid = remote_offer["offer_id"]
@@ -175,14 +188,14 @@ async def sync_streams_from_keitaro(
                     status="active",
                 )
                 db.add(local)
-                existing.offers.append(local)
+                offers.append(local)
             else:
                 local.status = "active"
                 local.share = remote_offer["share"]
                 if not local.offer_name:
                     local.offer_name = names.get(oid)
 
-        for local in list(existing.offers):
+        for local in list(offers):
             if local.offer_id not in remote_ids and local.status == "active":
                 # Disappeared in Keitaro → archive as removed, already matches remote
                 local.status = "removed"

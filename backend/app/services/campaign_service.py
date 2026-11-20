@@ -97,7 +97,8 @@ async def create_campaign(
     )
     db.add(record)
     await db.commit()
-    await db.refresh(record)
+    # Reload with relationships — async SQLAlchemy cannot lazy-load streams.
+    record = await stream_service.load_campaign(db, record.id)
 
     return await stream_service.sync_streams_from_keitaro(db, client, record)
 
