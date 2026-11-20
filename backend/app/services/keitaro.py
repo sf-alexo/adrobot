@@ -29,6 +29,8 @@ class KeitaroClient:
                 "Accept": "application/json",
             },
             timeout=30.0,
+            # Ignore HTTP(S)_PROXY from the environment (e.g. Cursor sandbox).
+            trust_env=False,
         )
         return self
 
@@ -51,7 +53,10 @@ class KeitaroClient:
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
     ) -> Any:
-        response = await self.client.request(method, path, json=json, params=params)
+        try:
+            response = await self.client.request(method, path, json=json, params=params)
+        except httpx.HTTPError as exc:
+            raise KeitaroError(f"Keitaro request failed: {exc}", status_code=502) from exc
         if response.status_code >= 400:
             try:
                 body = response.json()
